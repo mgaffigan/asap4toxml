@@ -14,23 +14,24 @@ namespace Asap42ToXml
         {
             var asapFilePath = args[0];
             var xmlFilePath = args[1];
+            var includeEmptyAttributes = args.Length > 2 && args[2].StartsWith("/i", StringComparison.CurrentCultureIgnoreCase);
 
             using (var inFile = File.OpenRead(asapFilePath))
             using (var outFile = XmlWriter.Create(
-                File.Open(xmlFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None), 
+                File.Open(xmlFilePath, FileMode.Create, FileAccess.ReadWrite, FileShare.None),
                 new XmlWriterSettings() { Async = true, Indent = true }))
             {
-                await CopyAsapToXmlAsync(inFile, outFile);
+                await CopyAsapToXmlAsync(inFile, outFile, includeEmptyAttributes);
             }
         }
 
-        private static async Task CopyAsapToXmlAsync(FileStream inFile, XmlWriter outFile)
+        private static async Task CopyAsapToXmlAsync(FileStream inFile, XmlWriter outFile, bool includeEmptyAttributes)
         {
             await outFile.WriteStartElementAsync(null, "Asap4File", null);
 
             var pipe = new Pipe();
             var readStreamPromise = ReadFileToPipe(inFile, pipe.Writer);
-            var writeStreamPromise = ReadPipeToXml(pipe.Reader, outFile);
+            var writeStreamPromise = ReadPipeToXml(pipe.Reader, outFile, includeEmptyAttributes);
             await Task.WhenAll(readStreamPromise, writeStreamPromise);
 
             await outFile.WriteEndElementAsync();
@@ -54,7 +55,7 @@ namespace Asap42ToXml
             pipe.Complete();
         }
 
-        private static async Task ReadPipeToXml(PipeReader pipe, XmlWriter outFile)
+        private static async Task ReadPipeToXml(PipeReader pipe, XmlWriter outFile, bool includeEmptyAttributes)
         {
             while (true)
             {
@@ -63,13 +64,14 @@ namespace Asap42ToXml
                 var buffer = result.Buffer;
                 SequencePosition? position = null;
 
+                bool ignoreNextIfEmpty = false;
                 do
                 {
                     position = buffer.PositionOf((byte)'\\');
 
                     if (position != null)
                     {
-                        await ProcessLineAsync(buffer.Slice(0, position.Value), outFile);
+                        ignoreNextIfEmpty = await ProcessLineAsync(buffer.Slice(0, position.Value), outFile, includeEmptyAttributes, ignoreNextIfEmpty);
                         buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
                     }
                 }
@@ -86,22 +88,35 @@ namespace Asap42ToXml
             pipe.Complete();
         }
 
-        private static async Task ProcessLineAsync(ReadOnlySequence<byte> lineSequence, XmlWriter outFile)
+        private static async Task<bool> ProcessLineAsync(ReadOnlySequence<byte> lineSequence, XmlWriter outFile, bool includeEmptyAttributes, bool ignoreNextIfEmpty)
         {
             var pos = lineSequence;
             var segmentName = ReadSegment(ref pos);
             if (string.IsNullOrWhiteSpace(segmentName))
             {
+                if (ignoreNextIfEmpty)
+                {
+                    return false;
+                }
+
                 segmentName = "UNK";
             }
 
             await outFile.WriteStartElementAsync(null, segmentName, null);
-            int segmentNo = 0;
+            int segmentNo = 1;
             while (!pos.IsEmpty)
             {
-                await outFile.WriteAttributeStringAsync(null, $"{segmentName}{segmentNo++:00}", null, ReadSegment(ref pos));
+                var value = ReadSegment(ref pos);
+                var segment = $"{segmentName}{segmentNo++:00}";
+                if (!string.IsNullOrEmpty(value) || includeEmptyAttributes)
+                {
+                    await outFile.WriteAttributeStringAsync(null, segment, null, value);
+                }
             }
             await outFile.WriteEndElementAsync();
+
+            // ignoreNextEmpty if TH since Header row has special processing in format
+            return segmentName == "TH";
         }
 
         private static string ReadSegment(ref ReadOnlySequence<byte> pos)
