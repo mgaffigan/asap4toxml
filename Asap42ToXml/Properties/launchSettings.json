@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Asap42ToXml": {
+      "commandName": "Project",
+      "commandLineArgs": "\"C:\\Users\\mgaffigan\\Desktop\\a\\WI20190509.dat\" \"C:\\Users\\mgaffigan\\Desktop\\a\\WI20190509.xml\""
+    }
+  }
+}
